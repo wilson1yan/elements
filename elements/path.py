@@ -10,7 +10,6 @@ import uuid
 
 
 class Path:
-
   __slots__ = ('_path',)
 
   filesystems = []
@@ -159,7 +158,6 @@ class Path:
 
 
 class LocalPath(Path):
-
   __slots__ = ('_path',)
 
   def __init__(self, path):
@@ -220,7 +218,6 @@ class LocalPath(Path):
 
 
 class TFPath(Path):
-
   __slots__ = ('_path',)
 
   gfile = None
@@ -232,6 +229,7 @@ class TFPath(Path):
     super().__init__(path)
     if not type(self).gfile:
       import tensorflow as tf
+
       tf.config.set_visible_devices([], 'GPU')
       tf.config.set_visible_devices([], 'TPU')
       type(self).gfile = tf.io.gfile
@@ -296,6 +294,7 @@ class TFPath(Path):
 
 def gcs_retry(duration=60):
   from google.cloud.storage.retry import DEFAULT_RETRY
+
   return dict(timeout=duration, retry=DEFAULT_RETRY.with_deadline(duration))
 
 
@@ -305,7 +304,6 @@ GCS_BUCKETS = {}
 
 
 class GCSPath(Path):
-
   __slots__ = ('_path', '_blob')
 
   def __init__(self, path):
@@ -324,6 +322,7 @@ class GCSPath(Path):
   def blob(self):
     if not self._blob:
       from google.cloud import storage
+
       path = str(self)[5:]
       name = path.split('/', 1)[1] if '/' in path[5:] else None
       self._blob = name and storage.Blob(name, self.bucket)
@@ -336,6 +335,7 @@ class GCSPath(Path):
       with GCS_LOCK:
         if bucket not in GCS_BUCKETS:
           import google
+
           try:
             GCS_BUCKETS[bucket] = self.client.get_bucket(bucket, **gcs_retry())
           except google.api_core.exceptions.NotFound:
@@ -351,12 +351,16 @@ class GCSPath(Path):
           from google import auth
           from google.cloud import storage
           import requests
+
           credentials, project = auth.default()
           client = storage.Client(project, credentials)
           # https://github.com/googleapis/python-storage/issues/253
           adapter = requests.adapters.HTTPAdapter(
-              pool_connections=64, pool_maxsize=64,
-              max_retries=3, pool_block=True)
+            pool_connections=64,
+            pool_maxsize=64,
+            max_retries=3,
+            pool_block=True,
+          )
           client._http.mount('https://', adapter)
           client._http._auth_request.session.mount('https://', adapter)
           GCS_CLIENT = client
@@ -383,7 +387,8 @@ class GCSPath(Path):
     assert self.blob, 'is a directory'
     if mode == 'rb':
       return self.blob.download_as_bytes(
-          self.client, raw_download=True, **gcs_retry(300))
+        self.client, raw_download=True, **gcs_retry(300)
+      )
     elif mode == 'r':
       return self.read('rb').decode('utf-8')
     else:
@@ -433,7 +438,10 @@ class GCSPath(Path):
           response = self.bucket.list_blobs(prefix=root + part, delimiter='/')
         else:
           response = self.bucket.list_blobs(
-              prefix=root, match_glob=root + part + '/', delimiter='/')
+            prefix=root,
+            match_glob=root + part + '/',
+            delimiter='/',
+          )
         results = list(response)  # Fetch all pages.
         results = list(response.prefixes)
         for child in results:
@@ -458,6 +466,7 @@ class GCSPath(Path):
 
   def isdir(self):
     from google.cloud import storage
+
     if not self.bucket:
       return False
     if not self.blob:
@@ -477,6 +486,7 @@ class GCSPath(Path):
     assert kwargs.pop('exist_ok', True)
     assert not kwargs, kwargs
     from google.cloud import storage
+
     if not self.blob:
       return
     if self.exists():
@@ -486,6 +496,7 @@ class GCSPath(Path):
 
   def remove(self, recursive=False):
     from google.cloud import storage
+
     isdir = self.isdir()
     isfile = self.isfile()
     if recursive:
@@ -501,7 +512,8 @@ class GCSPath(Path):
     dest = Path(dest)
     if isinstance(dest, type(self)) and not recursive:
       self.bucket.copy_blob(
-          self.blob, dest.bucket, dest.blob.name, **gcs_retry())
+        self.blob, dest.bucket, dest.blob.name, **gcs_retry()
+      )
     else:
       _copy_across_filesystems(self, dest, recursive)
 
@@ -512,7 +524,8 @@ class GCSPath(Path):
         self.bucket.rename_blob(self.blob, dest.blob.name, **gcs_retry())
       else:
         self.bucket.copy_blob(
-            self.blob, dest.bucket, dest.blob.name, **gcs_retry())
+          self.blob, dest.bucket, dest.blob.name, **gcs_retry()
+        )
     else:
       _copy_across_filesystems(self, dest, recursive)
       self.remove()
@@ -524,7 +537,6 @@ class GCSPath(Path):
 
 
 class GCSReadFile:
-
   def __init__(self, blob, client):
     self.blob = blob
     self.client = client
@@ -566,8 +578,11 @@ class GCSReadFile:
   def read(self, size=None):
     if size is None:
       buffer = self.blob.download_as_bytes(
-          self.client, start=self.pos or None, raw_download=True,
-          **gcs_retry())
+        self.client,
+        start=self.pos or None,
+        raw_download=True,
+        **gcs_retry(),
+      )
       self.pos += len(buffer)
       return buffer
     if not self.fetched:
@@ -575,10 +590,19 @@ class GCSReadFile:
       self.fetched = True
     end = min(self.pos + size, self.blob.size)
     result = self.blob.download_as_bytes(
-        self.client, start=self.pos, end=end, raw_download=True,
-        **gcs_retry())
+      self.client,
+      start=self.pos,
+      end=end,
+      raw_download=True,
+      **gcs_retry(),
+    )
     assert 1 <= len(result) < size + 8, (
-        self.blob.name, self.blob.size, self.pos, size, len(result))
+      self.blob.name,
+      self.blob.size,
+      self.pos,
+      size,
+      len(result),
+    )
     self.pos = end
     return result[:size]
 
@@ -587,9 +611,9 @@ class GCSReadFile:
 
 
 class GCSAppendFile:
-
   def __init__(self, blob, client, mode='a'):
     from google.cloud import storage
+
     self.client = client
     self.target = blob
     self.temp = storage.Blob('tmp/' + str(uuid.uuid4()), blob.bucket)
@@ -626,6 +650,7 @@ class GCSAppendFile:
 
   def close(self):
     import google.cloud.exceptions
+
     self.fp.close()
     if not self.target.exists(**gcs_retry()):
       self.target.upload_from_string(b'', **gcs_retry())
@@ -645,6 +670,405 @@ class GCSAppendFile:
         raise TimeoutError
 
 
+S3_LOCK = threading.RLock()
+S3_CLIENT = None
+S3_RESOURCE = None
+
+
+def s3_retry(max_attempts=3):
+  from botocore.config import Config
+
+  return Config(retries={'max_attempts': max_attempts, 'mode': 'adaptive'})
+
+
+class S3Path(Path):
+  __slots__ = ('_path',)
+
+  def __init__(self, path):
+    path = str(path)
+    super().__init__(path)
+
+  @property
+  def _bucket_name(self):
+    return str(self)[5:].split('/', 1)[0]
+
+  @property
+  def _key(self):
+    path = str(self)[5:]
+    return path.split('/', 1)[1] if '/' in path else None
+
+  @property
+  def client(self):
+    global S3_CLIENT
+    if not S3_CLIENT:
+      with S3_LOCK:
+        if not S3_CLIENT:
+          import boto3
+
+          S3_CLIENT = boto3.client('s3', config=s3_retry())
+    return S3_CLIENT
+
+  @property
+  def resource(self):
+    global S3_RESOURCE
+    if not S3_RESOURCE:
+      with S3_LOCK:
+        if not S3_RESOURCE:
+          import boto3
+
+          S3_RESOURCE = boto3.resource('s3', config=s3_retry())
+    return S3_RESOURCE
+
+  @property
+  def size(self):
+    resp = self.client.head_object(Bucket=self._bucket_name, Key=self._key)
+    return resp['ContentLength']
+
+  def open(self, mode='r'):
+    assert self._key, 'is a directory'
+    if 'r' in mode:
+      return S3ReadFile(self)
+    elif 'a' in mode:
+      return S3AppendFile(self, mode)
+    else:
+      return S3WriteFile(self, mode)
+
+  def read(self, mode='r'):
+    assert self._key, 'is a directory'
+    if mode == 'rb':
+      resp = self.client.get_object(Bucket=self._bucket_name, Key=self._key)
+      return resp['Body'].read()
+    elif mode == 'r':
+      return self.read('rb').decode('utf-8')
+    else:
+      raise NotImplementedError(mode)
+
+  def write(self, content, mode='w'):
+    assert mode in 'w a wb ab'.split(), mode
+    if mode == 'a':
+      prefix = self.read('r') if self.isfile() else ''
+      content = prefix + content
+    if mode == 'ab':
+      prefix = self.read('rb') if self.isfile() else b''
+      content = prefix + content
+    if isinstance(content, str):
+      content = content.encode('utf-8')
+    self.client.put_object(
+      Bucket=self._bucket_name, Key=self._key, Body=content
+    )
+
+  def absolute(self):
+    return self
+
+  def glob(self, pattern):
+    pattern = pattern.rstrip('/')
+    assert pattern
+    prefix = (self._key + '/') if self._key else ''
+    paginator = self.client.get_paginator('list_objects_v2')
+    if pattern == '**' or pattern == '**/*':
+      pages = paginator.paginate(Bucket=self._bucket_name, Prefix=prefix)
+      keys = []
+      for page in pages:
+        for obj in page.get('Contents', []):
+          keys.append(obj['Key'])
+      # Include intermediate directories.
+      dirs = set()
+      for k in keys:
+        if k.startswith(prefix):
+          rel = k[len(prefix) :]
+          parts = rel.split('/')
+          for i in range(1, len(parts)):
+            dirs.add(prefix + '/'.join(parts[:i]))
+      results = sorted(set([k.rstrip('/') for k in keys] + list(dirs)))
+    elif (
+      '**' not in pattern
+      and '*' not in pattern
+      and '?' not in pattern
+      and '[' not in pattern
+    ):
+      # Literal pattern.
+      target = prefix + pattern
+      results = []
+      # Check as file.
+      try:
+        self.client.head_object(Bucket=self._bucket_name, Key=target)
+        results.append(target)
+      except self.client.exceptions.ClientError:
+        pass
+      # Check as directory prefix.
+      resp = self.client.list_objects_v2(
+        Bucket=self._bucket_name, Prefix=target + '/', MaxKeys=1
+      )
+      if resp.get('Contents'):
+        results.append(target)
+    else:
+      # General glob: list with common prefix, then filter.
+      # Find the longest literal prefix before any glob character.
+      literal = ''
+      for ch in pattern:
+        if ch in '*?[{':
+          break
+        literal += ch
+      pages = paginator.paginate(
+        Bucket=self._bucket_name, Prefix=prefix + literal
+      )
+      keys = []
+      for page in pages:
+        for obj in page.get('Contents', []):
+          keys.append(obj['Key'])
+      # Include intermediate directories.
+      dirs = set()
+      for k in keys:
+        if k.startswith(prefix):
+          rel = k[len(prefix) :]
+          parts = rel.split('/')
+          for i in range(1, len(parts)):
+            dirs.add(prefix + '/'.join(parts[:i]))
+      all_paths = sorted(set([k.rstrip('/') for k in keys] + list(dirs)))
+      results = fnmatch.filter(all_paths, prefix + pattern)
+    results = sorted(set(results))
+    return [type(self)(f's3://{self._bucket_name}/{x}') for x in results]
+
+  def exists(self):
+    return self.isfile() or self.isdir()
+
+  def isfile(self):
+    if not self._key:
+      return False
+    try:
+      self.client.head_object(Bucket=self._bucket_name, Key=self._key)
+      return True
+    except self.client.exceptions.ClientError:
+      return False
+
+  def isdir(self):
+    if not self._key:
+      # Bucket-level path, check if bucket exists.
+      try:
+        self.client.head_bucket(Bucket=self._bucket_name)
+        return True
+      except self.client.exceptions.ClientError:
+        return False
+    # Check if any objects exist under this prefix.
+    resp = self.client.list_objects_v2(
+      Bucket=self._bucket_name, Prefix=self._key + '/', MaxKeys=1
+    )
+    return bool(resp.get('Contents'))
+
+  def mkdir(self, **kwargs):
+    assert kwargs.pop('parents', True)
+    assert kwargs.pop('exist_ok', True)
+    assert not kwargs, kwargs
+    if not self._key:
+      return
+    if self.exists():
+      return
+    # Create a directory marker.
+    self.client.put_object(
+      Bucket=self._bucket_name, Key=self._key + '/', Body=b''
+    )
+
+  def remove(self, recursive=False):
+    if recursive:
+      # Delete all objects under this prefix.
+      paginator = self.client.get_paginator('list_objects_v2')
+      prefix = self._key + '/' if self._key else ''
+      pages = paginator.paginate(Bucket=self._bucket_name, Prefix=prefix)
+      for page in pages:
+        objects = [{'Key': obj['Key']} for obj in page.get('Contents', [])]
+        if objects:
+          self.client.delete_objects(
+            Bucket=self._bucket_name, Delete={'Objects': objects}
+          )
+    else:
+      if self._key:
+        self.client.delete_object(Bucket=self._bucket_name, Key=self._key)
+        # Also try deleting the directory marker.
+        try:
+          self.client.delete_object(
+            Bucket=self._bucket_name, Key=self._key + '/'
+          )
+        except self.client.exceptions.ClientError:
+          pass
+
+  def copy(self, dest, recursive=False):
+    dest = Path(dest)
+    if isinstance(dest, type(self)) and not recursive:
+      self.client.copy_object(
+        Bucket=dest._bucket_name,
+        Key=dest._key,
+        CopySource={'Bucket': self._bucket_name, 'Key': self._key},
+      )
+    else:
+      _copy_across_filesystems(self, dest, recursive)
+
+  def move(self, dest, recursive=False):
+    dest = Path(dest)
+    if isinstance(dest, type(self)) and not recursive:
+      self.client.copy_object(
+        Bucket=dest._bucket_name,
+        Key=dest._key,
+        CopySource={'Bucket': self._bucket_name, 'Key': self._key},
+      )
+      self.client.delete_object(Bucket=self._bucket_name, Key=self._key)
+    else:
+      _copy_across_filesystems(self, dest, recursive)
+      self.remove()
+
+
+class S3ReadFile:
+  def __init__(self, s3path):
+    self.s3path = s3path
+    self.pos = 0
+    self._size = None
+
+  def __enter__(self):
+    return self
+
+  def __exit__(self, *e):
+    self.close()
+
+  def readable(self):
+    return True
+
+  def writeable(self):
+    return False
+
+  def seekable(self):
+    return True
+
+  def tell(self):
+    return self.pos
+
+  def _get_size(self):
+    if self._size is None:
+      self._size = self.s3path.size
+    return self._size
+
+  def seek(self, pos, mode=os.SEEK_SET):
+    size = self._get_size()
+    if mode == os.SEEK_SET:
+      self.pos = pos
+    elif mode == os.SEEK_CUR:
+      self.pos += pos
+    elif mode == os.SEEK_END:
+      self.pos = size + pos
+    else:
+      raise NotImplementedError(mode)
+    assert 0 <= self.pos <= size, (self.pos, size)
+
+  def read(self, size=None):
+    client = self.s3path.client
+    bucket = self.s3path._bucket_name
+    key = self.s3path._key
+    if size is None:
+      kwargs = {}
+      if self.pos > 0:
+        kwargs['Range'] = f'bytes={self.pos}-'
+      resp = client.get_object(Bucket=bucket, Key=key, **kwargs)
+      data = resp['Body'].read()
+      self.pos += len(data)
+      return data
+    file_size = self._get_size()
+    end = min(self.pos + size, file_size)
+    if self.pos >= end:
+      return b''
+    resp = client.get_object(
+      Bucket=bucket, Key=key, Range=f'bytes={self.pos}-{end - 1}'
+    )
+    data = resp['Body'].read()
+    self.pos = end
+    return data[:size]
+
+  def close(self):
+    pass
+
+
+class S3WriteFile:
+  def __init__(self, s3path, mode='w'):
+    self.s3path = s3path
+    self.mode = mode
+    self.buffer = io.BytesIO() if 'b' in mode else io.StringIO()
+
+  def __enter__(self):
+    return self
+
+  def __exit__(self, *e):
+    self.close()
+
+  def readable(self):
+    return False
+
+  def writeable(self):
+    return True
+
+  def seekable(self):
+    return False
+
+  def tell(self):
+    return self.buffer.tell()
+
+  def write(self, data):
+    self.buffer.write(data)
+
+  def close(self):
+    content = self.buffer.getvalue()
+    if isinstance(content, str):
+      content = content.encode('utf-8')
+    self.s3path.client.put_object(
+      Bucket=self.s3path._bucket_name, Key=self.s3path._key, Body=content
+    )
+
+
+class S3AppendFile:
+  def __init__(self, s3path, mode='a'):
+    self.s3path = s3path
+    self.mode = mode
+    self.buffer = io.BytesIO() if 'b' in mode else io.StringIO()
+    self.pos = s3path.size if s3path.isfile() else 0
+
+  def __enter__(self):
+    return self
+
+  def __exit__(self, *e):
+    self.close()
+
+  def readable(self):
+    return False
+
+  def writeable(self):
+    return True
+
+  def seekable(self):
+    return False
+
+  def tell(self):
+    return self.pos
+
+  def seek(self, pos, mode=os.SEEK_SET):
+    raise io.UnsupportedOperation
+
+  def read(self, size=None):
+    raise io.UnsupportedOperation
+
+  def write(self, data):
+    self.buffer.write(data)
+    self.pos += len(data)
+
+  def close(self):
+    new_data = self.buffer.getvalue()
+    if isinstance(new_data, str):
+      new_data = new_data.encode('utf-8')
+    if self.s3path.isfile():
+      existing = self.s3path.read('rb')
+      content = existing + new_data
+    else:
+      content = new_data
+    self.s3path.client.put_object(
+      Bucket=self.s3path._bucket_name, Key=self.s3path._key, Body=content
+    )
+
+
 def _copy_across_filesystems(source, dest, recursive):
   assert isinstance(source, Path), type(source)
   assert isinstance(dest, Path), type(dest)
@@ -658,7 +1082,7 @@ def _copy_across_filesystems(source, dest, recursive):
   prefix = str(source)
   for s in source.glob('**'):
     assert str(s).startswith(prefix), (source, s)
-    d = dest / str(s)[len(prefix):].lstrip('/')
+    d = dest / str(s)[len(prefix) :].lstrip('/')
     if s.isdir():
       d.mkdir()
     else:
@@ -666,7 +1090,8 @@ def _copy_across_filesystems(source, dest, recursive):
 
 
 Path.filesystems = [
-    (GCSPath, lambda path: path.startswith('gs://')),
-    (TFPath, lambda path: path.startswith('/cns/')),
-    (LocalPath, lambda path: True),
+  (GCSPath, lambda path: path.startswith('gs://')),
+  (S3Path, lambda path: path.startswith('s3://')),
+  (TFPath, lambda path: path.startswith('/cns/')),
+  (LocalPath, lambda path: True),
 ]

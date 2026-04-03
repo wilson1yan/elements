@@ -48,7 +48,7 @@ module-root = "."
 
 [tool.ruff]
 line-length = 79
-indent-width = 4
+indent-width = 2
 
 [tool.ruff.format]
 indent-style = "space"
